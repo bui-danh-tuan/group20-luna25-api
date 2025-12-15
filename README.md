@@ -2,7 +2,7 @@
 
 ## Chạy nhanh
 
-docker run -p 8000:8000 ghcr.io/bui-danh-tuan/luna25-api:latest
+docker run --pull=always -p 8000:8000 ghcr.io/bui-danh-tuan/luna25-api:latest
 
 API: http://localhost:8000  
 Swagger UI: http://localhost:8000/docs  
