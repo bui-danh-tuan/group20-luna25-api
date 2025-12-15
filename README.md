@@ -14,16 +14,15 @@ Authorization: Bearer group20-token
 
 ## Ví dụ gọi API (curl)
 
-curl -X POST "http://localhost:8000/api/v1/predict/lesion" \
-  -H "Authorization: Bearer mock-token" \
-  -H "accept: application/json" \
-  -H "Content-Type: multipart/form-data" \
-  -F "file=@sample.mha" \
-  -F "seriesInstanceUID=1.2.840.113619.2.55.3.604688435.123" \
-  -F "lesionID=1" \
-  -F "coordX=120.5" \
-  -F "coordY=85.2" \
-  -F "coordZ=42.0"
+curl --location 'http://localhost:8000/api/v1/predict/lesion' \
+--header 'Authorization: Bearer group20-token' \
+--form 'file=@"/E:/Code/VDHD/Data/1.2.840.113654.2.55.10001915497607871704679012670488177360.mha"' \
+--form 'seriesInstanceUID="1.2.840.113654.2.55.10001915497607871704679012670488177360"' \
+--form 'lesionID="1"' \
+--form 'coordX="87.13"' \
+--form 'coordY="-70.04"' \
+--form 'coordZ="-191.68"' \
+--form 'gender="Female"'
 
 ---
 

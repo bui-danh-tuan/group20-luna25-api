@@ -7,7 +7,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 app = FastAPI(
     title="LUNA25 Model Inference API",
     version="5.0",
-    description="Mock API for LUNA25 lesion prediction (random output)"
+    description="API for LUNA25 lesion prediction"
 )
 
 security = HTTPBearer()
@@ -17,7 +17,7 @@ security = HTTPBearer()
 # =========================
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
-    if token != "mock-token":
+    if token != "group20-token":
         raise HTTPException(
             status_code=401,
             detail={
@@ -31,7 +31,32 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
 # =========================
 # API Endpoint
 # =========================
-@app.post("/api/v1/predict/lesion")
+@app.post(
+    "/api/v1/predict/lesion",
+    responses={
+        200: {
+            "description": "Success response"
+        },
+        400: {
+            "description": "Bad Request – Invalid input or file format"
+        },
+        401: {
+            "description": "Unauthorized – Invalid or missing token"
+        },
+        504: {
+            "description": "Gateway Timeout – Processing time exceeded the limit",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "errorCode": "GATEWAY_TIMEOUT",
+                        "message": "Thời gian xử lý vượt quá 600 giây.",
+                        "processingTimeSec": 610
+                    }
+                }
+            }
+        }
+    }
+)
 async def predict_lesion(
     token: str = Depends(verify_token),
 
