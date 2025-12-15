@@ -35,13 +35,106 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     "/api/v1/predict/lesion",
     responses={
         200: {
-            "description": "Success response"
+            "description": "Success – Model inference completed successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "status": "success",
+                        "data": {
+                            "seriesInstanceUID": "1.2.840.113619.2.55.3.604688435.781.1596533431.467",
+                            "lesionID": 1,
+                            "probability": 0.742,
+                            "predictionLabel": 1,
+                            "processingTimeMs": 1280
+                        }
+                    }
+                }
+            }
         },
         400: {
-            "description": "Bad Request – Invalid input or file format"
+            "description": "Bad Request – Invalid input, file format, or field value",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "invalid_file_format": {
+                            "summary": "Invalid file format",
+                            "value": {
+                                "errorCode": "INVALID_FILE_FORMAT",
+                                "message": "Only .mha or .mhd files are supported"
+                            }
+                        },
+                        "missing_series_uid": {
+                            "summary": "Missing seriesInstanceUID",
+                            "value": {
+                                "errorCode": "INVALID_FILE_FORMAT",
+                                "message": "seriesInstanceUID is required"
+                            }
+                        },
+                        "invalid_field": {
+                            "summary": "Invalid field value",
+                            "value": {
+                                "errorCode": "INVALID_FIELD",
+                                "message": "gender must be 'Male' or 'Female'"
+                            }
+                        }
+                    }
+                }
+            }
         },
         401: {
-            "description": "Unauthorized – Invalid or missing token"
+            "description": "Unauthorized – Missing or invalid Bearer token",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "errorCode": "UNAUTHORIZED",
+                        "message": "Invalid or missing Bearer token"
+                    }
+                }
+            }
+        },
+        403: {
+            "description": "Forbidden – Access denied",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "errorCode": "FORBIDDEN",
+                        "message": "Token hợp lệ nhưng không có quyền truy cập hoặc đã vượt quá giới hạn gọi API."
+                    }
+                }
+            }
+        },
+        404: {
+            "description": "Not Found – Endpoint not found or model service offline",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "errorCode": "NOT_FOUND",
+                        "message": "Endpoint không tồn tại hoặc Service Model đang offline."
+                    }
+                }
+            }
+        },
+        422: {
+            "description": "Unprocessable Entity – Model processing error",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "errorCode": "PROCESSING_ERROR",
+                        "message": "Lỗi nội tại của Model khi xử lý dữ liệu ảnh."
+                    }
+                }
+            }
+        },
+        500: {
+            "description": "Internal Server Error – Unexpected server failure",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "errorCode": "INTERNAL_SERVER_ERROR",
+                        "message": "Lỗi hệ thống server không xác định."
+                    }
+                }
+            }
         },
         504: {
             "description": "Gateway Timeout – Processing time exceeded the limit",
@@ -57,6 +150,7 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
         }
     }
 )
+
 async def predict_lesion(
     token: str = Depends(verify_token),
 
@@ -120,13 +214,13 @@ async def predict_lesion(
     # =========================
     # MOCK MODEL INFERENCE (WITH RANDOM DELAY)
     # =========================
-    sleep_seconds = random.randint(0, 120)
+    sleep_seconds = random.randint(0, 3)
     time.sleep(sleep_seconds)
 
     processing_time_sec = time.time() - start_time
 
     # Timeout condition (> 600s)
-    if processing_time_sec > 6:
+    if processing_time_sec > 2:
         raise HTTPException(
             status_code=504,
             detail={
