@@ -93,6 +93,30 @@ async def predict_lesion(
     processing_time_ms = int((time.time() - start_time) * 1000)
 
     # =========================
+    # MOCK MODEL INFERENCE (WITH RANDOM DELAY)
+    # =========================
+    sleep_seconds = random.randint(0, 120)
+    time.sleep(sleep_seconds)
+
+    processing_time_sec = time.time() - start_time
+
+    # Timeout condition (> 600s)
+    if processing_time_sec > 6:
+        raise HTTPException(
+            status_code=504,
+            detail={
+                "errorCode": "GATEWAY_TIMEOUT",
+                "message": "Thời gian xử lý vượt quá 600 giây.",
+                "processingTimeSec": int(processing_time_sec)
+            }
+        )
+
+    probability = round(random.uniform(0.0, 1.0), 3)
+    prediction_label = 1 if probability >= 0.5 else 0
+
+    processing_time_ms = int(processing_time_sec * 1000)
+
+    # =========================
     # Response
     # =========================
     return JSONResponse(
