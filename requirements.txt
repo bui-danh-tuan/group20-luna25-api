@@ -13,3 +13,4 @@ torchaudio==2.5.1
 scipy==1.15.1
 timm==1.0.14
 torchsampler==0.1.2
+monai==1.4.0
