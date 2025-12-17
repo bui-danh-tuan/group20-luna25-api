@@ -5,7 +5,7 @@ import torch.utils.data as data
 from torch.utils.data import DataLoader
 import numpy.linalg as npl
 import scipy.ndimage as ndi
-from experiment_config import config
+from luna25.experiment_config import config
 from torch.utils.data import BatchSampler, RandomSampler
 from torchsampler import ImbalancedDatasetSampler
 import pandas as pd
@@ -523,7 +523,7 @@ def get_data_loader(
 def test():
     # Test the dataloader
     import pandas as pd
-    from experiment_config import config
+    from luna25.experiment_config import config
     import matplotlib.pyplot as plt
 
     dataset = pd.read_csv(config.CSV_DIR_VALID)

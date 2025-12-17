@@ -2,7 +2,7 @@
 Inference script for predicting malignancy of lung nodules
 """
 import numpy as np
-import luna25.dataloader as dataloader
+import luna25.dataloader_cls as dataloader
 import torch
 import torch.nn as nn
 from torchvision import models
@@ -104,7 +104,7 @@ class MalignancyProcessor:
         else:
             cls_model = self.base_cls
             model_path = os.path.join(fold_path, 'best_metric_cls_model.pth')
-            # print(f"Use model {model_path}")
+            print(f"Use model {model_path}")
             ckpt = torch.load(model_path)
             cls_model.load_state_dict(ckpt)
             with torch.no_grad():
