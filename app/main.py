@@ -1,9 +1,20 @@
 import time
-import random
+import tempfile
+from pathlib import Path
+
+import pandas as pd
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Depends
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+import SimpleITK
+# ===== LUNA25 baseline inference gốc =====
+from luna25.inference import itk_image_to_numpy_image
+from luna25.processor import MalignancyProcessor
 
+
+# =========================
+# App init
+# =========================
 app = FastAPI(
     title="LUNA25 Model Inference API",
     version="5.0",
@@ -26,6 +37,16 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
             }
         )
     return token
+
+
+# =========================
+# Init LUNA25 Processor (LOAD 1 LẦN)
+# =========================
+processor = MalignancyProcessor(
+    mode="2D",                       # đổi thành "3D" nếu dùng model 3D
+    suppress_logs=False,
+    model_name="LUNA25-baseline-2D"  # phải khớp thư mục trong resources
+)
 
 
 # =========================
@@ -164,7 +185,7 @@ async def predict_lesion(
     coordY: float = Form(...),
     coordZ: float = Form(...),
 
-    # Optional fields
+    # Optional fields (API-level, baseline không dùng)
     patientID: str | None = Form(None),
     studyDate: str | None = Form(None),
     ageAtStudyDate: int | None = Form(None),
@@ -173,7 +194,7 @@ async def predict_lesion(
     start_time = time.time()
 
     # =========================
-    # Validate file format
+    # Validate input
     # =========================
     if not (file.filename.endswith(".mha") or file.filename.endswith(".mhd")):
         raise HTTPException(
@@ -204,36 +225,48 @@ async def predict_lesion(
         )
 
     # =========================
-    # MOCK MODEL INFERENCE
+    # Build LUNA25 input_dir
     # =========================
-    probability = round(random.uniform(0.0, 1.0), 3)
-    prediction_label = 1 if probability >= 0.5 else 0
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
 
-    processing_time_ms = int((time.time() - start_time) * 1000)
+            # ---- Save CT file ----
+            suffix = ".mha" if file.filename.endswith(".mha") else ".mhd"
+            ct_path = tmpdir / f"{seriesInstanceUID}{suffix}"
 
-    # =========================
-    # MOCK MODEL INFERENCE (WITH RANDOM DELAY)
-    # =========================
-    sleep_seconds = random.randint(0, 3)
-    time.sleep(sleep_seconds)
+            with open(ct_path, "wb") as f:
+                f.write(await file.read())
 
-    processing_time_sec = time.time() - start_time
+            # ---- Read CT bằng SimpleITK (BASELINE GỐC) ----
+            image_itk = SimpleITK.ReadImage(str(ct_path))
 
-    # Timeout condition (> 600s)
-    if processing_time_sec > 2:
+            # ---- Convert sang numpy + header (BASELINE GỐC) ----
+            image_np, header = itk_image_to_numpy_image(image_itk)
+
+            # Set inputs cho processor
+            processor.define_inputs(
+                image=image_np,
+                header=header,
+                coords=[(coordX, coordY, coordZ)]
+            )
+
+            # Predict
+            probability, logits = processor.predict()
+
+            probability = float(probability[0][0])
+            prediction_label = 1 if probability >= 0.5 else 0
+
+    except Exception as e:
         raise HTTPException(
-            status_code=504,
+            status_code=500,
             detail={
-                "errorCode": "GATEWAY_TIMEOUT",
-                "message": "Thời gian xử lý vượt quá 600 giây.",
-                "processingTimeSec": int(processing_time_sec)
+                "errorCode": "INTERNAL_SERVER_ERROR",
+                "message": str(e)
             }
         )
 
-    probability = round(random.uniform(0.0, 1.0), 3)
-    prediction_label = 1 if probability >= 0.5 else 0
-
-    processing_time_ms = int(processing_time_sec * 1000)
+    processing_time_ms = int((time.time() - start_time) * 1000)
 
     # =========================
     # Response
@@ -245,12 +278,13 @@ async def predict_lesion(
             "data": {
                 "seriesInstanceUID": seriesInstanceUID,
                 "lesionID": lesionID,
-                "probability": probability,
+                "probability": round(probability, 3),
                 "predictionLabel": prediction_label,
                 "processingTimeMs": processing_time_ms
             }
         }
     )
+
 
 if __name__ == "__main__":
     import uvicorn
