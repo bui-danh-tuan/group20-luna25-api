@@ -1,4 +1,3 @@
-
 from pathlib import Path
 import numpy as np
 import torch
@@ -6,8 +5,53 @@ import torch.utils.data as data
 from torch.utils.data import DataLoader
 import numpy.linalg as npl
 import scipy.ndimage as ndi
-from luna25.experiment_config import config
+from experiment_config import config
+from torch.utils.data import BatchSampler, RandomSampler
+from torchsampler import ImbalancedDatasetSampler
 import pandas as pd
+from monai.transforms import (
+    Compose,
+    RandRotate90,
+    RandAffine,
+    RandGaussianNoise,
+    RandAdjustContrast,
+    RandGaussianSmooth,
+    RandScaleIntensity,
+    RandShiftIntensity,
+    RandZoom,
+    SpatialPad,
+    EnsureChannelFirst,
+    ScaleIntensityRange,
+    RandFlip,
+    RandRotate,
+    RandSpatialCrop,
+    RandCoarseDropout,
+    RandCoarseShuffle,
+    RandHistogramShift,
+    RandBiasField,
+    RandScaleCrop,
+    RandSpatialCropSamples,
+    RandSpatialCropd,
+    RandScaleIntensityd,
+    RandShiftIntensityd,
+    RandGaussianNoised,
+    RandGaussianSmoothd,
+    RandAdjustContrastd,
+    RandRotate90d,
+    RandFlipd,
+    RandRotated,
+    RandZoomd,
+    RandCoarseDropoutd,
+    RandCoarseShuffled,
+    RandHistogramShiftd,
+    RandBiasFieldd,
+    RandScaleCropd,
+    RandSpatialCropSamplesd,
+    SpatialPadd,
+    EnsureChannelFirstd,
+    ScaleIntensityRanged,
+    Rand3DElastic
+)
 
 def _calculateAllPermutations(itemList):
     if len(itemList) == 1:
@@ -174,7 +218,7 @@ def volumeTransform(
     )
 
 
-def clip_and_scale(npzarray, maxHU=400.0, minHU=-1000.0):
+def clip_and_scale(npzarray, maxHU=600.0, minHU=-1000.0):
     npzarray = (npzarray - minHU) / (maxHU - minHU)
     npzarray[npzarray > 1] = 1.0
     npzarray[npzarray < 0] = 0.0
@@ -203,7 +247,7 @@ class CTCaseDataset(data.Dataset):
             size_px (int): size of the patch in pixels
             size_mm (int): size of the patch in mm
             mode (str): 2D or 3D
-
+            use_monai_transforms (bool): whether to use MONAI transforms
     """
 
     def __init__(
@@ -215,6 +259,7 @@ class CTCaseDataset(data.Dataset):
         size_px: int = 64,
         size_mm: int = 50,
         mode: str = "2D",
+        use_monai_transforms: bool = False,
     ):
 
         self.data_dir = Path(data_dir)
@@ -225,18 +270,47 @@ class CTCaseDataset(data.Dataset):
         self.size_px = size_px
         self.size_mm = size_mm
         self.mode = mode
+        self.use_monai_transforms = use_monai_transforms
 
+        # Define MONAI transforms
+        if self.use_monai_transforms:
+            if self.mode == "2D":
+                self.transforms = Compose([
+                    RandGaussianNoise(prob=0.3, mean=0.0, std=0.1),
+                    RandAdjustContrast(prob=0.3, gamma=(0.8, 1.2)),
+                    RandGaussianSmooth(prob=0.3, sigma_x=(0.5, 1.5)),
+                    RandScaleIntensity(prob=0.3, factors=0.3),
+                    RandShiftIntensity(prob=0.3, offsets=0.1),
+                    RandZoom(prob=0.3, min_zoom=0.9, max_zoom=1.1),
+                    RandFlip(prob=0.5, spatial_axis=0),
+                    RandFlip(prob=0.5, spatial_axis=1),
+                    ScaleIntensityRange(a_min=-1000.0, a_max=600.0, b_min=0.0, b_max=1.0),
+                ])
+            else:  # 3D mode
+                self.transforms = Compose([
+                    RandGaussianNoise(prob=0.4, mean=0.0, std=0.15),
+                    RandAdjustContrast(prob=0.4, gamma=(0.7, 1.3)),
+                    RandHistogramShift(prob=0.4, num_control_points=10),
+                    RandBiasField(prob=0.5, degree=2),
+                    RandZoom(prob=0.4, min_zoom=0.8, max_zoom=1.2),
+                    RandFlip(prob=0.5, spatial_axis=0),
+                    RandFlip(prob=0.5, spatial_axis=1),
+                    RandFlip(prob=0.5, spatial_axis=2),
+                    ScaleIntensityRange(a_min=-1000.0, a_max=600.0, b_min=0.0, b_max=1.0),
+                ])
 
-    def __getitem__(self, idx):  # caseid, z, y, x, label, radius
-
+    def __getitem__(self, idx):
         pd = self.dataset.iloc[idx]
-
         label = pd.label
-
         annotation_id = pd.AnnotationID
 
         image_path = self.data_dir / "image" / f"{annotation_id}.npy"
         metadata_path = self.data_dir / "metadata" / f"{annotation_id}.npy"
+
+        age = int(pd.Age_at_StudyDate) / 100
+        gender = 1 if pd.Gender == 'Female' else 0
+
+
 
         # numpy memory map data/image case file
         img = np.load(image_path, mmap_mode="r")
@@ -250,7 +324,6 @@ class CTCaseDataset(data.Dataset):
         if self.translations == True:
             radius = 2.5
             translations = radius if radius > 0 else None
-        
 
         if self.mode == "2D":
             output_shape = (1, self.size_px, self.size_px)
@@ -278,15 +351,21 @@ class CTCaseDataset(data.Dataset):
         # ensure same datatype...
         patch = patch.astype(np.float32)
 
-        # clip and scale...
-        patch = clip_and_scale(patch)
+        # Apply MONAI transforms if enabled
+        if self.use_monai_transforms:
+            patch = self.transforms(patch)
+        else:
+            # clip and scale if not using MONAI transforms
+            patch = clip_and_scale(patch)
 
         target = torch.ones((1,)) * label
 
         sample = {
-            "image": torch.from_numpy(patch),
+            "image": patch,
             "label": target.long(),
             "ID": annotation_id,
+            "age": torch.tensor(age, dtype=torch.float32),
+            "gender": torch.tensor(gender, dtype=torch.float32),            
         }
 
         return sample
@@ -400,12 +479,14 @@ def get_data_loader(
     dataset,
     mode="2D",
     sampler=None,
+    balanced=False,
     workers=0,
     batch_size=64,
     size_px=64,
     size_mm=70,
     rotations=None,
     translations=None,
+    use_monai_transforms=False,
 ):
 
     data_set = CTCaseDataset(
@@ -416,11 +497,17 @@ def get_data_loader(
         size_mm=size_mm,
         size_px=size_px,
         mode=mode,
+        use_monai_transforms=use_monai_transforms,
     )
 
-    shuffle = False
-    if sampler == None:
-        shuffle = (True,)
+    if balanced:
+        sampler = ImbalancedDatasetSampler(
+            data_set,
+            labels=dataset.label.values
+        )
+        shuffle = False
+    else:
+        shuffle = sampler is None
 
     data_loader = DataLoader(
         data_set,
@@ -431,7 +518,6 @@ def get_data_loader(
         sampler=sampler,
         worker_init_fn=worker_init_fn,
     )
-
     return data_loader
 
 def test():
@@ -452,6 +538,7 @@ def test():
         size_mm=config.SIZE_MM,
         rotations=config.ROTATION,
         translations=config.TRANSLATION,
+        use_monai_transforms=False,
     )
 
     for i, data in enumerate(train_loader):

@@ -2,11 +2,12 @@
 Inference script for predicting malignancy of lung nodules
 """
 import numpy as np
-from luna25 import dataloader
+import luna25.dataloader as dataloader
 import torch
 import torch.nn as nn
 from torchvision import models
 from luna25.models.model_3d import I3D
+from luna25.models.Pulse3D import Pulse3D
 from luna25.models.model_2d import ResNet18
 import os
 import math
@@ -21,27 +22,40 @@ logging.basicConfig(
 # define processor
 class MalignancyProcessor:
     """
-    Loads a chest CT scan, and predicts the malignancy around a nodule
+    Inference with k-fold ensemble of models for lung nodule malignancy prediction.
+    Supports 2D or 3D classification (no segmentation).
     """
 
-    def __init__(self, mode="2D", suppress_logs=False, model_name="LUNA25-baseline-2D"):
-
-        self.size_px = 64
-        self.size_mm = 50
-
+    def __init__(self, mode="3D", model_root="/opt/app/resources/", 
+                 model_name="LUNA25-pulse-Pulse3D-20250720", k_folds=5,
+                 size_px=64, size_mm=50, suppress_logs=False):
+        self.mode = mode.upper()
+        self.model_root = model_root
         self.model_name = model_name
-        self.mode = mode
+        self.k_folds = k_folds
+        self.size_px = size_px
+        self.size_mm = size_mm
         self.suppress_logs = suppress_logs
-
         if not self.suppress_logs:
             logging.info("Initializing the deep learning system")
+        # Paths to each fold directory
+        self.fold_paths = [
+            "luna25"
+            # os.path.join(self.model_root, self.model_name, f"fold_{i}")
+            # for i in range(self.k_folds)
+        ]
 
         if self.mode == "2D":
-            self.model_2d = ResNet18(weights=None).cuda()
-        elif self.mode == "3D":
-            self.model_3d = I3D(num_classes=1, pre_trained=False, input_channels=3).cuda()
+            self._build_2d_model()
+        else:
+            self._build_3d_model()
 
-        self.model_root = "/opt/app/resources/"
+    def _build_2d_model(self):
+        self.base_model = ResNet18(weights=None).cuda().eval()
+
+    def _build_3d_model(self):
+        # only classification model, no segmentation
+        self.base_cls = Pulse3D().cuda().eval()
 
     def define_inputs(self, image, header, coords):
         self.image = image
@@ -49,64 +63,68 @@ class MalignancyProcessor:
         self.coords = coords
 
     def extract_patch(self, coord, output_shape, mode):
-
         patch = dataloader.extract_patch(
             CTData=self.image,
             coord=coord,
-            srcVoxelOrigin=self.header["origin"],
-            srcWorldMatrix=self.header["transform"],
-            srcVoxelSpacing=self.header["spacing"],
+            srcVoxelOrigin=self.header['origin'],
+            srcWorldMatrix=self.header['transform'],
+            srcVoxelSpacing=self.header['spacing'],
             output_shape=output_shape,
-            voxel_spacing=(
-                self.size_mm / self.size_px,
-                self.size_mm / self.size_px,
-                self.size_mm / self.size_px,
-            ),
+            voxel_spacing=(self.size_mm/self.size_px,)*3,
             coord_space_world=True,
             mode=mode,
         )
-
-        # ensure same datatype...
         patch = patch.astype(np.float32)
-
-        # clip and scale...
         patch = dataloader.clip_and_scale(patch)
         return patch
 
-    def _process_model(self, mode):
-
-        if not self.suppress_logs:
-            logging.info("Processing in " + mode)
-
-        if mode == "2D":
+    def _predict_fold(self, fold_path):
+        """
+        Load classification weights from fold_path and predict probabilities.
+        """
+        nodules = []
+        if self.mode == "2D":
             output_shape = [1, self.size_px, self.size_px]
-            model = self.model_2d
         else:
             output_shape = [self.size_px, self.size_px, self.size_px]
-            model = self.model_3d
 
-        nodules = []
-
-        for _coord in self.coords:
-
-            patch = self.extract_patch(_coord, output_shape, mode=mode)
+        for coord in self.coords:
+            patch = self.extract_patch(coord, output_shape, self.mode)
             nodules.append(patch)
+        nodules = np.stack(nodules)
+        tensor = torch.from_numpy(nodules).cuda()
 
-        nodules = np.array(nodules)
-        nodules = torch.from_numpy(nodules).cuda()
+        if self.mode == "2D":
+            model = self.base_model
+            # load checkpoint for classification
+            ckpt = torch.load(os.path.join(fold_path, 'best_metric_cls_model.pth'))
+            model.load_state_dict(ckpt)
+            with torch.no_grad():
+                logits = model(tensor)
+        else:
+            cls_model = self.base_cls
+            model_path = os.path.join(fold_path, 'best_metric_cls_model.pth')
+            # print(f"Use model {model_path}")
+            ckpt = torch.load(model_path)
+            cls_model.load_state_dict(ckpt)
+            with torch.no_grad():
+                logits = cls_model(tensor)
 
-        ckpt = torch.load("luna25\\resources\\best_metric_model.pth")
-        model.load_state_dict(ckpt)
-        model.eval()
-        logits = model(nodules)
-        logits = logits.data.cpu().numpy()
-
-        logits = np.array(logits)
-        return logits
+        logits = logits.cpu().numpy()
+        probs = torch.sigmoid(torch.from_numpy(logits)).numpy()
+        return probs.squeeze()
 
     def predict(self):
+        """
+        Run inference across all folds and return mean probability and per-fold probabilities.
+        """
+        all_probs = []
+        for fold_path in self.fold_paths:
+            # logging.info(f"Predicting with fold: {os.path.basename(fold_path)}")
+            probs = self._predict_fold(fold_path)
+            all_probs.append(probs)
 
-        logits = self._process_model(self.mode)
-
-        probability = torch.sigmoid(torch.from_numpy(logits)).numpy()
-        return probability, logits
+        # shape: (k_folds, n_samples)
+        ensemble = np.stack(all_probs, axis=0)
+        mean_prob = ensemble.mean(axis=0)
+        return mean_prob, ensemble

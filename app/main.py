@@ -7,14 +7,95 @@ from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Depends
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import SimpleITK
-# ===== LUNA25 baseline inference gốc =====
-from luna25.inference import itk_image_to_numpy_image
+
+
+# =========================
+# IMPORT ĐÚNG THEO CẤU TRÚC THƯ MỤC
+# =========================
+import time
+
 from luna25.processor import MalignancyProcessor
+from luna25.inference import itk_image_to_numpy_image
 
 
 # =========================
-# App init
+# HÀM CHẠY MODEL (BASELINE SAFE)
 # =========================
+
+async def run_model_inference(
+    *,
+    file,                     # UploadFile
+    seriesInstanceUID: str,
+    lesionID: int,
+    coordX: float,
+    coordY: float,
+    coordZ: float,
+    timeout_sec: int = 600
+):
+    """
+    Run LUNA25 inference directly from API request inputs.
+
+    Returns:
+        dict {
+            seriesInstanceUID,
+            lesionID,
+            probability,
+            predictionLabel,
+            processingTimeMs
+        }
+    """
+
+    from luna25.inference import itk_image_to_numpy_image
+
+    start_time = time.time()
+
+    # =========================
+    # 1. Save uploaded file
+    # =========================
+    suffix = ".mha" if file.filename.endswith(".mha") else ".mhd"
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        ct_path = tmpdir / f"{seriesInstanceUID}{suffix}"
+
+        with open(ct_path, "wb") as f:
+            f.write(await file.read())
+
+        # =========================
+        # 2. Read CT + convert
+        # =========================
+        image_itk = SimpleITK.ReadImage(str(ct_path))
+        image_np, header = itk_image_to_numpy_image(image_itk)
+
+        # =========================
+        # 3. Timeout check (pre)
+        # =========================
+        if time.time() - start_time > timeout_sec:
+            raise TimeoutError("Inference timeout exceeded")
+
+        # =========================
+        # 4. Run model
+        # =========================\
+        processor = MalignancyProcessor()
+        processor.define_inputs(
+            image=image_np,
+            header=header,
+            coords=[(coordX, coordY, coordZ)]
+        )
+
+        probability, x = processor.predict()
+        prediction_label = 1 if probability >= 0.5 else 0
+        print("="*100)
+        print(header)
+        print(probability)
+        print([(coordX, coordY, coordZ)])
+
+    # =========================
+    # 5. Return result
+    # =========================
+    return probability, prediction_label
+
+
 app = FastAPI(
     title="LUNA25 Model Inference API",
     version="5.0",
@@ -23,9 +104,7 @@ app = FastAPI(
 
 security = HTTPBearer()
 
-# =========================
-# Auth check (Mock)
-# =========================
+
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
     if token != "group20-token":
@@ -39,19 +118,6 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     return token
 
 
-# =========================
-# Init LUNA25 Processor (LOAD 1 LẦN)
-# =========================
-processor = MalignancyProcessor(
-    mode="2D",                       # đổi thành "3D" nếu dùng model 3D
-    suppress_logs=False,
-    model_name="LUNA25-baseline-2D"  # phải khớp thư mục trong resources
-)
-
-
-# =========================
-# API Endpoint
-# =========================
 @app.post(
     "/api/v1/predict/lesion",
     responses={
@@ -214,7 +280,6 @@ async def predict_lesion(
             }
         )
 
-    # Validate gender (if provided)
     if gender and gender not in ["Male", "Female"]:
         raise HTTPException(
             status_code=400,
@@ -223,54 +288,18 @@ async def predict_lesion(
                 "message": "gender must be 'Male' or 'Female'"
             }
         )
-
-    # =========================
-    # Build LUNA25 input_dir
-    # =========================
-    try:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmpdir = Path(tmpdir)
-
-            # ---- Save CT file ----
-            suffix = ".mha" if file.filename.endswith(".mha") else ".mhd"
-            ct_path = tmpdir / f"{seriesInstanceUID}{suffix}"
-
-            with open(ct_path, "wb") as f:
-                f.write(await file.read())
-
-            # ---- Read CT bằng SimpleITK (BASELINE GỐC) ----
-            image_itk = SimpleITK.ReadImage(str(ct_path))
-
-            # ---- Convert sang numpy + header (BASELINE GỐC) ----
-            image_np, header = itk_image_to_numpy_image(image_itk)
-
-            # Set inputs cho processor
-            processor.define_inputs(
-                image=image_np,
-                header=header,
-                coords=[(coordX, coordY, coordZ)]
-            )
-
-            # Predict
-            probability, logits = processor.predict()
-
-            probability = float(probability[0][0])
-            prediction_label = 1 if probability >= 0.5 else 0
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "errorCode": "INTERNAL_SERVER_ERROR",
-                "message": str(e)
-            }
-        )
+    
+    probability, label = await run_model_inference(
+        file=file,
+        seriesInstanceUID=seriesInstanceUID,
+        lesionID=lesionID,
+        coordX=coordX,
+        coordY=coordY,
+        coordZ=coordZ
+    )
 
     processing_time_ms = int((time.time() - start_time) * 1000)
 
-    # =========================
-    # Response
-    # =========================
     return JSONResponse(
         status_code=200,
         content={
@@ -278,8 +307,8 @@ async def predict_lesion(
             "data": {
                 "seriesInstanceUID": seriesInstanceUID,
                 "lesionID": lesionID,
-                "probability": round(probability, 3),
-                "predictionLabel": prediction_label,
+                "probability": float(round(float(probability), 3)),
+                "predictionLabel": label,
                 "processingTimeMs": processing_time_ms
             }
         }
