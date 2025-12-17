@@ -40,7 +40,11 @@ class MalignancyProcessor:
             logging.info("Initializing the deep learning system")
         # Paths to each fold directory
         self.fold_paths = [
-            "luna25"
+            "luna25",
+            "luna25",
+            "luna25",
+            "luna25",
+            "luna25",
             # os.path.join(self.model_root, self.model_name, f"fold_{i}")
             # for i in range(self.k_folds)
         ]

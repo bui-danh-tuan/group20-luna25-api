@@ -85,10 +85,6 @@ async def run_model_inference(
 
         probability, x = processor.predict()
         prediction_label = 1 if probability >= 0.5 else 0
-        print("="*100)
-        print(header)
-        print(probability)
-        print([(coordX, coordY, coordZ)])
 
     # =========================
     # 5. Return result
