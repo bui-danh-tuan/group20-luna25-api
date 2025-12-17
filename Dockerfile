@@ -1,9 +1,14 @@
-FROM pytorch/pytorch:2.5.1-cuda11.7-cudnn8-runtime
+FROM nvidia/cuda:11.7.1-cudnn8-runtime-ubuntu22.04
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y wget \
+RUN apt-get update && apt-get install -y \
+    python3.11 \
+    python3-pip \
+    wget \
     && rm -rf /var/lib/apt/lists/*
+
+RUN ln -sf /usr/bin/python3.11 /usr/bin/python
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
