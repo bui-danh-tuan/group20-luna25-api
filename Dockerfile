@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# CÀI wget (bắt buộc)
+# Cài wget
 RUN apt-get update && apt-get install -y wget \
     && rm -rf /var/lib/apt/lists/*
 
@@ -11,10 +11,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 
-# TẢI MODEL TỪ GITHUB RELEASE
+# TẢI MODEL TỪ GITHUB RELEASE (TAG ĐÚNG)
 RUN mkdir -p /app/luna25 && \
     wget -O /app/luna25/best_metric_cls_model.pth \
-    https://github.com/bui-danh-tuan/group20-luna25-api/releases/download/V1/best_metric_cls_model.pth
+    https://github.com/bui-danh-tuan/group20-luna25-api/releases/download/v1/best_metric_cls_model.pth
 
 EXPOSE 8000
 
